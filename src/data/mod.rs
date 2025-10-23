@@ -1,0 +1,121 @@
+use std::cmp::Ordering;
+use std::ops::{Index, IndexMut};
+
+mod dataset;
+mod heuristics;
+pub mod view;
+
+pub use dataset::Dataset;
+
+#[derive(Copy, Clone, Debug)]
+pub struct DataPoint {
+    tid: usize,
+    value: f64,
+    unique_value_idx: usize,
+    label: f64,
+}
+
+impl DataPoint {
+    pub fn new(tid: usize, value: f64, label: f64) -> Self {
+        Self {
+            tid,
+            value,
+            unique_value_idx: usize::MAX,
+            label,
+        }
+    }
+
+    pub fn tid(&self) -> usize {
+        self.tid
+    }
+
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    pub fn label(&self) -> f64 {
+        self.label
+    }
+
+    pub fn set_unique_value_id(&mut self, value: usize) {
+        self.unique_value_idx = value
+    }
+
+    pub fn unique_value_id(&self) -> usize {
+        self.unique_value_idx
+    }
+}
+
+impl PartialEq for DataPoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Eq for DataPoint {}
+
+impl PartialOrd for DataPoint {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DataPoint {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.value.total_cmp(&other.value)
+    }
+}
+
+#[derive(Debug)]
+pub struct Feature {
+    index: usize, // TODO : Should be useless
+    elements: Vec<DataPoint>,
+}
+
+impl Default for Feature {
+    fn default() -> Self {
+        Self {
+            index: 0,
+            elements: vec![],
+        }
+    }
+}
+
+impl Feature {
+    pub fn new(index: usize) -> Self {
+        Self {
+            index,
+            elements: vec![],
+        }
+    }
+
+    pub fn sort(&mut self) {
+        self.elements.sort()
+    }
+
+    pub fn insert(&mut self, data_point: DataPoint) {
+        self.elements.push(data_point);
+    }
+
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+}
+
+impl Index<usize> for Feature {
+    type Output = DataPoint;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.elements[index]
+    }
+}
+
+impl IndexMut<usize> for Feature {
+    fn index_mut(&mut self, index: usize) -> &mut DataPoint {
+        &mut self.elements[index]
+    }
+}
