@@ -1,6 +1,6 @@
 use clap::ValueEnum;
 
-#[derive(Default, Copy, Clone, ValueEnum)]
+#[derive(Default, Copy, Debug,  Clone, PartialOrd, PartialEq, ValueEnum)]
 pub enum PointSelector {
     #[default]
     Mid,
@@ -28,7 +28,8 @@ impl SearchConfig {
         max_gap: usize,
         max_error: usize,
         use_heuristic: bool,
-        fast_d2: bool
+        fast_d2: bool,
+        split_strategy: PointSelector
     ) -> Self {
         Self {
             max_depth,
@@ -39,7 +40,7 @@ impl SearchConfig {
             is_root: true,
             use_heuristic,
             fast_d2,
-            point_selector: PointSelector::First,
+            point_selector: split_strategy,
         }
     }
 

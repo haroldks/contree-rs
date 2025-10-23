@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use clap::Parser;
+use crate::common::PointSelector;
 
 #[derive(Debug, Parser)]
 #[clap(name = "con-tree", version, author, about)]
@@ -31,6 +32,10 @@ pub struct GeneralParser {
     /// Sort split and feature using gini index
     #[arg(long, default_value_t = false)]
     pub sort_by_heuristic: bool,
+
+    /// Split selection strategy to use in the search
+    #[arg(long, value_enum, default_value_t = PointSelector::Mid)]
+    pub split_selection_strategy: PointSelector,
 
     /// Use specialized algorithm for depth 2 tree
     #[arg(short, long, default_value_t = false)]

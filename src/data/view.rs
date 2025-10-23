@@ -297,7 +297,7 @@ impl<'a> DataView<'a> {
                 best_gini = gini;
             }
 
-            gini_values.push((split_pos, gini));
+            gini_values.push((split_idx, gini));
             last_pos = split_pos;
         }
 
