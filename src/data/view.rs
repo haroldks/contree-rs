@@ -344,6 +344,7 @@ impl<'a> DataView<'a> {
     }
 
     pub fn split(&self, sf: usize, split_point: usize) -> (Self, Self) {
+        coz::scope!("Split view");
         let col = &self.dataset[sf];
         let sf_idxs = &self.feature_columns[sf];
 

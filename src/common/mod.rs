@@ -7,7 +7,7 @@ pub enum PointSelector {
     First,
     Random
 }
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct SearchConfig {
     pub max_depth: usize,
     pub min_sup: usize,
@@ -16,8 +16,12 @@ pub struct SearchConfig {
     pub max_error: usize,
     pub is_root: bool,
     pub use_heuristic: bool,
+    pub use_discrepancy: bool,
     pub fast_d2: bool,
-    pub point_selector: PointSelector
+    pub point_selector: PointSelector,
+    pub nb_runs: usize,
+    pub discrepancy: usize,
+    pub budget: usize
 }
 
 impl SearchConfig {
@@ -39,8 +43,12 @@ impl SearchConfig {
             max_error,
             is_root: true,
             use_heuristic,
+            use_discrepancy: false,
             fast_d2,
             point_selector: split_strategy,
+            nb_runs: 0,
+            discrepancy: 0,
+            budget: 0,
         }
     }
 

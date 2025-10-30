@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 pub struct Entry {
     pub feature: usize,
     pub split: f64,
+    pub age: usize,
     pub error: usize,
     pub label: usize,
+    
+    pub ub: usize,
 
     pub is_leaf: bool,
     pub is_optimal: bool,
@@ -23,8 +26,10 @@ impl Default for Entry {
         Self {
             feature: usize::MAX,
             split: f64::INFINITY,
+            age: 0,
             error: usize::MAX,
             label: usize::MAX,
+            ub: 0,
             is_leaf: false,
             is_optimal: false,
             depth: 0,
@@ -74,6 +79,7 @@ impl Cache {
     }
 
     pub fn insert(&mut self, bitset: &Bitset, depth: usize) -> (bool, usize) {
+        coz::scope!("insert in cache");
         let mut cache = &mut self.map[depth][bitset.count()];
         if cache.contains_key(&bitset) {
             (false, *cache.get(&bitset).unwrap())

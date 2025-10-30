@@ -41,6 +41,7 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
     }
 
     pub fn fit(&mut self, dataset: &Dataset) {
+        
         let root_view = DataView::root(dataset, self.config.use_heuristic);
 
         if USE_CACHE {
@@ -81,6 +82,7 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
         is_new: bool,
         upper_bound: usize,
     ) {
+        coz::progress!();
         if  USE_CACHE && (current_best.error == 0 || view.len() == 0) {
             if let Some(entry) = self.cache.get_mut(parent_index) {
                 entry.is_leaf = true;
@@ -141,7 +143,7 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
         }
 
 
-        //TODO: Here explore each feature and the predetermined order
+
 
         let num_features = view.get_feature_number();
         let heuristics_data = view.features_best_score();
@@ -162,18 +164,18 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
 
                 return;
             }
-
-            if USE_CACHE {
-                if let Some(entry) = self.cache.get_mut(parent_index) {
-                    entry.is_optimal = true;
-                }
-            }
-
             if !self.time_remains() {
                 return;
             }
-            // TODO : Check runtime
         }
+
+        if USE_CACHE {
+            if let Some(entry) = self.cache.get_mut(parent_index) {
+                entry.is_optimal = true;
+            }
+        }
+
+
     }
 
     fn expand_on_feature(
@@ -186,7 +188,7 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
         upper_bound: usize,
     ) {
 
-
+        coz::scope!("expand_on_feature");
         let feature_column = view.get_sorted_feature(feature_index);
         let feature_column_ids = view.get_feature_indices(feature_index);
 
@@ -241,7 +243,6 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
                 continue;
             }
 
-            // TODO : Allow to use other points as the best split and random
 
 
 
@@ -351,11 +352,20 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
                     current_best.left = left_index;
                     current_best.right = right_index;
 
+                    let is_optimal = feature_best == 0;
+                    current_best.is_optimal = is_optimal;
+
                    if USE_CACHE {
                        if let Some(entry) = self.cache.get_mut(cache_index) {
                            *entry = *current_best;
                        }
                    }
+
+                    if feature_best ==  0 {
+                        return;
+                    }
+
+
                 }
             }
             else {
@@ -396,6 +406,13 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
             }
 
         }
+
+        if USE_CACHE {
+            if let Some(entry) = self.cache.get_mut(cache_index) {
+                entry.is_optimal = true;
+            }
+        }
+
     }
 
     /// Explore splits prioritized by gini quality while using pruner
@@ -739,6 +756,9 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
                     current_best.left = left_index;
                     current_best.right = right_index;
 
+                    let is_optimal = feature_best == 0;
+                    current_best.is_optimal = is_optimal;
+
                     if USE_CACHE {
                         if let Some(entry) = self.cache.get_mut(cache_index) {
                             *entry = *current_best;
@@ -778,6 +798,12 @@ impl <const USE_CACHE: bool>ConTree<USE_CACHE> {
                 break;
             }
 
+        }
+
+        if USE_CACHE {
+            if let Some(entry) = self.cache.get_mut(cache_index) {
+                entry.is_optimal = true;
+            }
         }
     }
 
