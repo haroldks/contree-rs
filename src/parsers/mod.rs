@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use clap::Parser;
 use crate::common::PointSelector;
+use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[clap(name = "con-tree", version, author, about)]
@@ -48,5 +48,4 @@ pub struct GeneralParser {
     /// Printing Tree
     #[arg(long, default_value_t = false)]
     pub(crate) print_tree: bool,
-
 }

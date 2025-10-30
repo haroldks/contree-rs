@@ -230,14 +230,7 @@ impl<'a> IntervalsPruner<'a> {
     /// * [index](cci:1://file:///home/haroldks/IdeaProjects/pytrees-continuous/src/bitsets/mod.rs:201:4-207:5) - The index at which the split was performed
     /// * `left_score` - The score associated with the left subinterval (None means uninitialized)
     /// * `right_score` - The score associated with the right subinterval (None means uninitialized)
-    pub fn add_result(
-        &mut self,
-        index: usize,
-        mut left_score: usize,
-        mut right_score: usize,
-    ) {
-
-
+    pub fn add_result(&mut self, index: usize, mut left_score: usize, mut right_score: usize) {
         if left_score == 0 {
             self.leftmost_zero_index = Some(
                 self.leftmost_zero_index
@@ -297,8 +290,6 @@ mod tests {
         assert_eq!(pruner.leftmost_zero_index, None);
         assert_eq!(pruner.rightmost_zero_index, None);
     }
-
-
 
     #[test]
     fn test_bound_creation() {

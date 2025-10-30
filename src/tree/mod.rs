@@ -1,5 +1,5 @@
-use std::usize;
 use serde::{Deserialize, Serialize};
+use std::usize;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct NodeInfos {

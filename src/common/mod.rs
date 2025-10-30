@@ -1,11 +1,11 @@
 use clap::ValueEnum;
 
-#[derive(Default, Copy, Debug,  Clone, PartialOrd, PartialEq, ValueEnum)]
+#[derive(Default, Copy, Debug, Clone, PartialOrd, PartialEq, ValueEnum)]
 pub enum PointSelector {
     #[default]
     Mid,
     First,
-    Random
+    Random,
 }
 #[derive(Copy, Clone, Debug)]
 pub struct SearchConfig {
@@ -21,7 +21,7 @@ pub struct SearchConfig {
     pub point_selector: PointSelector,
     pub nb_runs: usize,
     pub discrepancy: usize,
-    pub budget: usize
+    pub budget: usize,
 }
 
 impl SearchConfig {
@@ -33,7 +33,7 @@ impl SearchConfig {
         max_error: usize,
         use_heuristic: bool,
         fast_d2: bool,
-        split_strategy: PointSelector
+        split_strategy: PointSelector,
     ) -> Self {
         Self {
             max_depth,

@@ -2,12 +2,11 @@ mod algorithms;
 mod bitsets;
 mod caching;
 mod common;
-mod cover;
 mod data;
 mod globals;
+mod parsers;
 mod reader;
 mod tree;
-mod parsers;
 
 pub fn add(left: usize, right: usize) -> usize {
     left + right

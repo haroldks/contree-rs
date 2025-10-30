@@ -10,7 +10,7 @@ pub struct Entry {
     pub age: usize,
     pub error: usize,
     pub label: usize,
-    
+
     pub ub: usize,
 
     pub is_leaf: bool,
@@ -105,7 +105,7 @@ impl Cache {
         let cache = &self.map[depth][bitset.count()];
         cache.get(bitset)
     }
-    
+
     pub fn len(&self) -> usize {
         self.arena.len()
     }

@@ -1,10 +1,10 @@
-use std::collections::VecDeque;
 use crate::algorithms::interval_pruner::{Bound, IntervalsPruner};
 use crate::caching::Entry;
 use crate::common::{SearchConfig, Statistics};
-use crate::data::{DataPoint, Feature};
 use crate::data::view::DataView;
+use crate::data::{DataPoint, Feature};
 use crate::tree::Tree;
+use std::collections::VecDeque;
 
 /// Helper struct to track state while finding optimal depth-1 trees
 struct SubtreeLeafScores {
@@ -15,8 +15,8 @@ struct SubtreeLeafScores {
     best_left_label: Option<usize>,
     best_right_label: Option<usize>,
 
-    best_left_error: usize,   // Error for the left leaf
-    best_right_error: usize,  // Error for the right leaf
+    best_left_error: usize,  // Error for the left leaf
+    best_right_error: usize, // Error for the right leaf
 
     // State tracking during feature iteration
     previous_value: f64,
@@ -68,30 +68,41 @@ impl SubtreeLeafScores {
     }
 }
 
-
-
-
 #[derive(Default)]
 pub struct ConTreeDepth2;
 
-
-impl  ConTreeDepth2 {
-
-    pub fn fit(&self, view: &DataView, search_config: &SearchConfig, entry: &mut Entry, upper_bound: usize, stats: &mut Statistics) -> Tree  {
-
+impl ConTreeDepth2 {
+    pub fn fit(
+        &self,
+        view: &DataView,
+        search_config: &SearchConfig,
+        entry: &mut Entry,
+        upper_bound: usize,
+        stats: &mut Statistics,
+    ) -> Tree {
         debug_assert!(search_config.max_depth <= 2, "Depth should be at most 2");
 
         let num_features = view.get_feature_number();
         let mut tree = Tree::empty_tree(2);
-        tree.update_root()
-            .map(|updater| updater.error(entry.error)
+        tree.update_root().map(|updater| {
+            updater
+                .error(entry.error)
                 .feature(entry.feature)
-                .label(entry.label));
+                .label(entry.label)
+        });
 
         for feature in 0..num_features {
-            self.expand_feature_subtree(view, feature, search_config, entry, entry.error.min(upper_bound), &mut tree, stats);
+            self.expand_feature_subtree(
+                view,
+                feature,
+                search_config,
+                entry,
+                entry.error.min(upper_bound),
+                &mut tree,
+                stats,
+            );
             if entry.error <= search_config.max_gap {
-                break
+                break;
             }
         }
         // tree.clean_orphaned_nodes();
@@ -99,10 +110,16 @@ impl  ConTreeDepth2 {
         tree
     }
 
-
-
-    fn expand_feature_subtree(&self, view: &DataView, feature: usize, config: &SearchConfig, entry: &mut Entry, upper_bound: usize, tree: &mut Tree, stats: &mut Statistics) {
-
+    fn expand_feature_subtree(
+        &self,
+        view: &DataView,
+        feature: usize,
+        config: &SearchConfig,
+        entry: &mut Entry,
+        upper_bound: usize,
+        tree: &mut Tree,
+        stats: &mut Statistics,
+    ) {
         let feature_column = view.get_sorted_feature(feature);
         let feature_column_ids = view.get_feature_indices(feature);
         let possible_split_indices = view.get_possible_split_indices(feature);
@@ -134,27 +151,34 @@ impl  ConTreeDepth2 {
             let threshold_value = if mid > 0 {
                 let previous = feature_column_ids[possible_split_indices[mid - 1]];
                 let point = feature_column_ids[split_point];
-                (feature_column[previous].value()
-                    + feature_column[point].value())
-                    / 2.0
+                (feature_column[previous].value() + feature_column[point].value()) / 2.0
             } else {
                 let point = feature_column_ids[split_point];
-                (feature_column[point].value() + feature_column[feature_column_ids[0]].value()) / 2.0
+                (feature_column[point].value() + feature_column[feature_column_ids[0]].value())
+                    / 2.0
             };
-
 
             let mut left_tree = Tree::empty_tree(1);
             let mut right_tree = Tree::empty_tree(1);
-            self.get_leaves_score(view, feature, split_point, threshold_value, &mut left_tree, &mut right_tree, entry.error);
-            stats.specialized_solver_call +=1;
+            self.get_leaves_score(
+                view,
+                feature,
+                split_point,
+                threshold_value,
+                &mut left_tree,
+                &mut right_tree,
+                entry.error,
+            );
+            stats.specialized_solver_call += 1;
             let current_best_error = left_tree.root_error() + right_tree.root_error();
             if current_best_error < entry.error {
                 entry.error = current_best_error;
-                tree.update_root()
-                    .map(|updater| updater
+                tree.update_root().map(|updater| {
+                    updater
                         .error(entry.error)
                         .feature(feature)
-                        .split(threshold_value));
+                        .split(threshold_value)
+                });
 
                 entry.feature = tree.root_feature().map_or(usize::MAX, |v| v);
                 entry.split = tree.root_split().map_or(f64::INFINITY, |v| v);
@@ -171,11 +195,17 @@ impl  ConTreeDepth2 {
 
             pruner.add_result(mid, left_tree.root_error(), right_tree.root_error());
             if current_bound.left_bound == current_bound.right_bound {
-                continue
+                continue;
             }
 
-            let score_difference = (left_tree.root_error() + right_tree.root_error()).saturating_sub(entry.error);
-            let (left_bound, right_bound) = pruner.neighbourhood_pruning(score_difference, current_bound.left_bound, current_bound.right_bound, mid);
+            let score_difference =
+                (left_tree.root_error() + right_tree.root_error()).saturating_sub(entry.error);
+            let (left_bound, right_bound) = pruner.neighbourhood_pruning(
+                score_difference,
+                current_bound.left_bound,
+                current_bound.right_bound,
+                mid,
+            );
             if left_bound <= current_bound.right_bound {
                 queue.push_back(Bound {
                     left_bound,
@@ -193,18 +223,22 @@ impl  ConTreeDepth2 {
                 });
             }
         }
-
-
-
     }
 
-
-
-    fn get_leaves_score(&self, view: &DataView, feature: usize, split_point: usize, threshold_value: f64, left_tree: &mut Tree, right_tree: &mut Tree, best_error: usize)  {
+    fn get_leaves_score(
+        &self,
+        view: &DataView,
+        feature: usize,
+        split_point: usize,
+        threshold_value: f64,
+        left_tree: &mut Tree,
+        right_tree: &mut Tree,
+        best_error: usize,
+    ) {
         let split_feature = view.get_sorted_feature(feature);
         let feature_column_ids = view.get_feature_indices(feature);
         let mut split_feature_split_indices = vec![0; view.total_instances];
-        let mut split_index: Option<usize> =  None;
+        let mut split_index: Option<usize> = None;
 
         let size = feature_column_ids.len();
         for i in 0..size {
@@ -220,13 +254,20 @@ impl  ConTreeDepth2 {
         let dataset_size = view.get_dataset_size();
         let class_number = view.get_num_labels();
 
-        debug_assert!(split_point > 0 && split_point < dataset_size,
-                      "left and right subtree need to be non-empty");
+        debug_assert!(
+            split_point > 0 && split_point < dataset_size,
+            "left and right subtree need to be non-empty"
+        );
 
         let mut left_leaves = SubtreeLeafScores::new(split_point, class_number);
         let mut right_leaves = SubtreeLeafScores::new(dataset_size - split_point, class_number);
 
-        view.initialize_split_parameters(feature, split_point, &mut left_leaves.label_frequency, &mut right_leaves.label_frequency);
+        view.initialize_split_parameters(
+            feature,
+            split_point,
+            &mut left_leaves.label_frequency,
+            &mut right_leaves.label_frequency,
+        );
         let mut upper_bound = best_error;
 
         for label in 0..class_number {
@@ -239,8 +280,12 @@ impl  ConTreeDepth2 {
                 right_leaves.max_label = label;
             }
         }
-        left_leaves.classification_score = left_leaves.classification_score.max(left_leaves.max_label_frequency);
-        right_leaves.classification_score = right_leaves.classification_score.max(right_leaves.max_label_frequency);
+        left_leaves.classification_score = left_leaves
+            .classification_score
+            .max(left_leaves.max_label_frequency);
+        right_leaves.classification_score = right_leaves
+            .classification_score
+            .max(right_leaves.max_label_frequency);
 
         for current_feature_index in 0..view.get_feature_number() {
             if current_feature_index == feature {
@@ -268,76 +313,87 @@ impl  ConTreeDepth2 {
                     &mut upper_bound,
                 );
             }
-            if left_leaves.classification_score + right_leaves.classification_score == dataset_size {
+            if left_leaves.classification_score + right_leaves.classification_score == dataset_size
+            {
                 break;
             }
         }
 
         if left_leaves.classification_score == left_leaves.max_label_frequency {
             // Make a leaf with the majority class
-            left_tree.update_root()
-                .map(|updater| updater.label(left_leaves.max_label)
+            left_tree.update_root().map(|updater| {
+                updater
+                    .label(left_leaves.max_label)
                     .error(left_leaves.size - left_leaves.classification_score)
-                    .leaf());
+                    .leaf()
+            });
         } else {
-
-            left_tree.update_root()
-                .map(|updater| updater
+            left_tree.update_root().map(|updater| {
+                updater
                     .feature(left_leaves.best_feature_index)
                     .split(left_leaves.best_threshold)
-                    .error(left_leaves.size - left_leaves.classification_score));
+                    .error(left_leaves.size - left_leaves.classification_score)
+            });
 
             let (ll, lr) = left_tree.node_children(left_tree.get_root_index());
 
-            left_tree.update_node(ll)
-                .map(|updater| updater
+            left_tree.update_node(ll).map(|updater| {
+                updater
                     .label(left_leaves.best_left_label.unwrap())
                     .error(left_leaves.best_left_error)
-                    .leaf());
+                    .leaf()
+            });
 
-            left_tree.update_node(lr)
-                .map(|updater| updater
+            left_tree.update_node(lr).map(|updater| {
+                updater
                     .label(left_leaves.best_right_label.unwrap())
                     .error(left_leaves.best_right_error)
-                    .leaf());
-
-
+                    .leaf()
+            });
         }
-        debug_assert!(left_leaves.classification_score <= left_leaves.size, "LR - Left tree error should be non-negative");
+        debug_assert!(
+            left_leaves.classification_score <= left_leaves.size,
+            "LR - Left tree error should be non-negative"
+        );
 
         if right_leaves.classification_score == right_leaves.max_label_frequency {
             // Make a leaf with the majority class
-            right_tree.update_root()
-                .map(|updater| updater.label(right_leaves.max_label)
+            right_tree.update_root().map(|updater| {
+                updater
+                    .label(right_leaves.max_label)
                     .error(right_leaves.size - right_leaves.classification_score)
-                    .leaf());
+                    .leaf()
+            });
         } else {
             // Make a split with two leaf children
-            right_tree.update_root()
-                .map(|updater| updater
+            right_tree.update_root().map(|updater| {
+                updater
                     .feature(right_leaves.best_feature_index)
                     .split(right_leaves.best_threshold)
-                    .error(right_leaves.size - right_leaves.classification_score));
+                    .error(right_leaves.size - right_leaves.classification_score)
+            });
 
             let (ll, lr) = right_tree.node_children(right_tree.get_root_index());
 
-            right_tree.update_node(ll)
-                .map(|updater| updater
+            right_tree.update_node(ll).map(|updater| {
+                updater
                     .label(right_leaves.best_left_label.unwrap())
                     .error(right_leaves.best_left_error)
-                    .leaf());
+                    .leaf()
+            });
 
-            right_tree.update_node(lr)
-                .map(|updater| updater
+            right_tree.update_node(lr).map(|updater| {
+                updater
                     .label(right_leaves.best_right_label.unwrap())
                     .error(right_leaves.best_right_error)
-                    .leaf());
+                    .leaf()
+            });
         }
-        debug_assert!(right_leaves.classification_score <= right_leaves.size, "LR - Right tree error should be non-negative");
-
+        debug_assert!(
+            right_leaves.classification_score <= right_leaves.size,
+            "LR - Right tree error should be non-negative"
+        );
     }
-
-
 
     fn process_depth_one_feature<const IS_SAME_FEATURE: bool>(
         &self,
@@ -405,7 +461,7 @@ impl  ConTreeDepth2 {
 
             // Update upper bound (now both trees are accessible)
             *upper_bound = (*upper_bound).min(
-                dataset_size - (left_tree.classification_score + right_tree.classification_score)
+                dataset_size - (left_tree.classification_score + right_tree.classification_score),
             );
 
             // Early termination checks
@@ -414,7 +470,8 @@ impl  ConTreeDepth2 {
             }
 
             if left_tree.can_skip >= (left_tree.size - left_tree.current_element_count)
-                && right_tree.can_skip >= (right_tree.size - right_tree.current_element_count) {
+                && right_tree.can_skip >= (right_tree.size - right_tree.current_element_count)
+            {
                 break;
             }
         }
@@ -422,7 +479,7 @@ impl  ConTreeDepth2 {
 
     // Helper function to process a single data point for one tree
     fn process_single_point(
-        current_feature_data: &DataPoint,  // Adjust type to match your data structure
+        current_feature_data: &DataPoint, // Adjust type to match your data structure
         tree: &mut SubtreeLeafScores,
         class_number: usize,
         current_feature_index: usize,
@@ -435,7 +492,8 @@ impl  ConTreeDepth2 {
 
         // Skip if same value or in skip mode
         if Some(current_feature_data.unique_value_id()) == tree.previous_unique_value_index
-            || tree.can_skip > 0 {
+            || tree.can_skip > 0
+        {
             tree.current_element_count += 1;
             tree.current_label_frequency[current_feature_data.label() as usize] += 1;
             tree.previous_value = current_feature_data.value();
@@ -456,7 +514,8 @@ impl  ConTreeDepth2 {
                 left_label = label_value;
             }
 
-            let remaining = (tree.label_frequency[label_value] - tree.current_label_frequency[label_value]) as i32;
+            let remaining = (tree.label_frequency[label_value]
+                - tree.current_label_frequency[label_value]) as i32;
             if remaining > right_classification_score {
                 right_classification_score = remaining;
                 right_label = label_value;
@@ -474,10 +533,14 @@ impl  ConTreeDepth2 {
 
             tree.best_left_label = Some(left_label);
             tree.best_right_label = Some(right_label);
-            tree.best_left_error = (tree.current_element_count as i32 - left_classification_score) as usize;
-            tree.best_right_error = ((tree.size - tree.current_element_count) as i32 - right_classification_score) as usize;
+            tree.best_left_error =
+                (tree.current_element_count as i32 - left_classification_score) as usize;
+            tree.best_right_error = ((tree.size - tree.current_element_count) as i32
+                - right_classification_score) as usize;
         } else {
-            tree.can_skip = tree.classification_score.saturating_sub(total_score as usize);
+            tree.can_skip = tree
+                .classification_score
+                .saturating_sub(total_score as usize);
         }
 
         // Early termination check for this tree
@@ -491,23 +554,20 @@ impl  ConTreeDepth2 {
         tree.previous_value = current_feature_data.value();
         tree.previous_unique_value_index = Some(current_feature_data.unique_value_id());
     }
-
 }
-
-
 
 #[cfg(test)]
 mod d2_test {
-    use std::path::Path;
     use crate::algorithms::depth2::ConTreeDepth2;
     use crate::caching::Entry;
     use crate::common::{PointSelector, SearchConfig, Statistics};
     use crate::data::view::DataView;
     use crate::reader::data_reader::DataReader;
     use crate::reader::DataReaderError;
+    use std::path::Path;
 
     #[test]
-    fn test_anneal() ->  Result<(), DataReaderError> {
+    fn test_anneal() -> Result<(), DataReaderError> {
         let reader = DataReader::default();
         let path = Path::new("test_data/hepatitis.txt");
         let mut dataset = reader.read_file(path)?;
@@ -517,7 +577,7 @@ mod d2_test {
 
         let d2 = ConTreeDepth2::default();
         let mut entry = Entry::default();
-        let config= SearchConfig {
+        let config = SearchConfig {
             max_depth: 2,
             min_sup: 1,
             max_time: 10.0,
@@ -529,13 +589,16 @@ mod d2_test {
             point_selector: PointSelector::default(),
         };
 
-        let tree = d2.fit(&root_view, &config, &mut entry, 0, &mut Statistics::default());
+        let tree = d2.fit(
+            &root_view,
+            &config,
+            &mut entry,
+            0,
+            &mut Statistics::default(),
+        );
         println!("Entry : {:?}", entry);
         tree.print();
 
-
         Ok(())
-
-
     }
 }

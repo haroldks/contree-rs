@@ -127,13 +127,12 @@ impl<'a> DataView<'a> {
                     &label_freq,
                     dataset.num_labels(),
                 );
-              
+
                 heuristic_values.set_feature_ginis(feature_idx, ordered_index, gini);
             }
             // Sort features by Gini index
             heuristic_values.sort_by_gini();
         }
-
 
         let mut bitset = Bitset::new(BitsetInit::Full(total_instances));
         bitset.save_count();
@@ -218,15 +217,13 @@ impl<'a> DataView<'a> {
         feature_index: usize,
         split_point: usize,
         left_freq: &mut Vec<usize>,
-        right_freq: &mut Vec<usize>
+        right_freq: &mut Vec<usize>,
     ) {
         let num_labels = self.dataset.num_labels();
 
         let total_size = self.get_dataset_size();
         let feature_ids = self.get_feature_indices(feature_index);
         let feature = self.get_sorted_feature(feature_index);
-
-
 
         // Count the smaller side, derive the other by subtraction
         if split_point < total_size - split_point {
@@ -248,7 +245,6 @@ impl<'a> DataView<'a> {
                 left_freq[label] = self.label_freq[label] - right_freq[label];
             }
         }
-        
     }
 
     /// Compute Gini index for all possible split points of a feature
@@ -412,7 +408,7 @@ impl<'a> DataView<'a> {
                     );
                     left_heuristics.set_feature_ginis(f, ordered_splits, best_gini);
 
-                    let  (ordered_splits, best_gini) = Self::compute_gini_for_all_splits(
+                    let (ordered_splits, best_gini) = Self::compute_gini_for_all_splits(
                         &self.dataset[f],
                         &right_pfi[f],
                         &right_split_indices[f],
@@ -517,12 +513,16 @@ impl<'a> DataView<'a> {
             // Store computed Gini values
             if self.sort_by_heuristic {
                 // Sort by gini value and extract indices
-                left_gini_values.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                right_gini_values.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                
-                let left_sorted_indices: Vec<usize> = left_gini_values.into_iter().map(|(idx, _)| idx).collect();
-                let right_sorted_indices: Vec<usize> = right_gini_values.into_iter().map(|(idx, _)| idx).collect();
-                
+                left_gini_values
+                    .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                right_gini_values
+                    .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+                let left_sorted_indices: Vec<usize> =
+                    left_gini_values.into_iter().map(|(idx, _)| idx).collect();
+                let right_sorted_indices: Vec<usize> =
+                    right_gini_values.into_iter().map(|(idx, _)| idx).collect();
+
                 left_heuristics.set_feature_ginis(f, left_sorted_indices, left_best_gini);
                 right_heuristics.set_feature_ginis(f, right_sorted_indices, right_best_gini);
             }
