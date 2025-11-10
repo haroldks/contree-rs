@@ -1,3 +1,4 @@
+use crate::algorithms::GenericConTree;
 use crate::common::PointSelector;
 use clap::Parser;
 use std::path::PathBuf;
@@ -41,6 +42,10 @@ pub struct GeneralParser {
     #[arg(short, long, default_value_t = false)]
     pub fast_d2: bool,
 
+    /// Use LDS
+    #[arg(long, default_value_t = false)]
+    pub use_lds: bool,
+
     /// Printing Statistics and Constraints
     #[arg(long, default_value_t = false)]
     pub print_stats: bool,
@@ -48,4 +53,38 @@ pub struct GeneralParser {
     /// Printing Tree
     #[arg(long, default_value_t = false)]
     pub(crate) print_tree: bool,
+}
+
+impl From<GeneralParser> for GenericConTree<true> {
+    fn from(parser: GeneralParser) -> Self {
+        GenericConTree::new(
+            parser.support,
+            parser.depth,
+            parser.time_limit,
+            parser.max_error,
+            parser.split_selection_strategy,
+            parser.max_gap,
+            parser.sort_by_heuristic,
+            parser.fast_d2,
+            parser.use_lds,
+        )
+
+    }
+}
+
+impl From<&GeneralParser> for GenericConTree<true> {
+    fn from(parser: &GeneralParser) -> Self {
+        GenericConTree::new(
+            parser.support,
+            parser.depth,
+            parser.time_limit,
+            parser.max_error,
+            parser.split_selection_strategy,
+            parser.max_gap,
+            parser.sort_by_heuristic,
+            parser.fast_d2,
+            parser.use_lds,
+        )
+
+    }
 }
