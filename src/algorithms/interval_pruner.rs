@@ -43,8 +43,8 @@ impl Bound {
 pub struct IntervalsPruner<'a> {
     possible_split_indexes: &'a [usize],
     possible_split_size: usize,
-    rightmost_zero_index: Option<usize>,
-    leftmost_zero_index: Option<usize>,
+    pub rightmost_zero_index: Option<usize>,
+    pub leftmost_zero_index: Option<usize>,
     max_gap: usize,
     /// Maps split index -> (left_score, right_score)
     evaluated_indices_record: HashMap<usize, (usize, usize)>,
@@ -260,7 +260,10 @@ impl<'a> IntervalsPruner<'a> {
     }
 
     /// Helper: Find first element >= value (like std::lower_bound)
-    fn lower_bound(&self, left: usize, right: usize, value: usize) -> usize {
+    fn lower_bound(&self, left: usize, mut right: usize, value: usize) -> usize {
+        if left >= right {
+            right = self.possible_split_indexes.len() - 1
+        }
         let slice = &self.possible_split_indexes[left..=right];
         match slice.binary_search(&value) {
             Ok(pos) => left + pos,
@@ -269,7 +272,10 @@ impl<'a> IntervalsPruner<'a> {
     }
 
     /// Helper: Find first element > value (like std::upper_bound)
-    fn upper_bound(&self, left: usize, right: usize, value: usize) -> usize {
+    fn upper_bound(&self, left: usize, mut right: usize, value: usize) -> usize {
+        if left >= right {
+            right = self.possible_split_indexes.len() - 1
+        }
         let slice = &self.possible_split_indexes[left..=right];
         let pos = slice.partition_point(|&x| x <= value);
         left + pos

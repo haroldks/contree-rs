@@ -585,8 +585,12 @@ mod d2_test {
             max_error: 0,
             is_root: false,
             use_heuristic: true,
+            use_discrepancy: false,
             fast_d2: false,
             point_selector: PointSelector::default(),
+            nb_runs: 0,
+            discrepancy: 0,
+            budget: 0,
         };
 
         let tree = d2.fit(

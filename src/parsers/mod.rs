@@ -53,6 +53,13 @@ pub struct GeneralParser {
     /// Printing Tree
     #[arg(long, default_value_t = false)]
     pub(crate) print_tree: bool,
+
+    #[arg(long)]
+    pub result_dir: PathBuf,
+
+    /// Overwriting file
+    #[arg(long, default_value_t = false)]
+    pub overwrite: bool,
 }
 
 impl From<GeneralParser> for GenericConTree<true> {

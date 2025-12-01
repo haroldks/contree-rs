@@ -8,6 +8,7 @@ use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::collections::VecDeque;
 use std::time::Instant;
+use serde::Deserialize;
 
 pub struct ConTreeLds<const USE_CACHE: bool> {
     config: SearchConfig,
@@ -17,6 +18,18 @@ pub struct ConTreeLds<const USE_CACHE: bool> {
     runtime: Instant,
     rng: ThreadRng,
     max_discrepancy: usize,
+    max_split_number: usize,
+    split_budget: usize,
+    budget_strategy: BudgetStrategy,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Default)]
+pub enum BudgetStrategy {
+    Diagonal,
+    Lexicographic,
+    GeometricBoth,
+    #[default]
+    FeaturePriority,
 }
 
 impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
@@ -50,24 +63,33 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
             runtime: Instant::now(),
             rng: rand::rng(),
             max_discrepancy: usize::MAX,
+            max_split_number: usize::MAX,
+            split_budget: 1,
+            budget_strategy: BudgetStrategy::Diagonal,
         }
     }
 
     pub fn fit(&mut self, dataset: &Dataset) {
 
         let root_view = DataView::root(dataset, self.config.use_heuristic);
+        // let root_view = DataView::root_with_split_budget(dataset, 90);
 
-        let max_discrepancy = self.max_discrepancy.min(Self::discrepancy_limit(
-            root_view.get_feature_number(),
-            self.config.max_depth,
-        ));
+        // let max_discrepancy = self.max_discrepancy.min(Self::discrepancy_limit(
+        //     root_view.get_feature_number(),
+        //     self.config.max_depth,
+        // ));
 
-        for _ in 0..=max_discrepancy {
-            let is_done = self.partial_fit(&root_view);
-            if  is_done {
-                break;
-            }
+        // self.max_split_number = root_view.get_max_splits();
+        let mut is_done = false;
+        while !is_done {
+            is_done = self.partial_fit(&root_view);
         }
+        // for _ in 0..=max_discrepancy {
+        //     let is_done = self.partial_fit(&root_view);
+        //     if  is_done {
+        //         break;
+        //     }
+        // }
 
     }
 
@@ -84,7 +106,9 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                 root_view.get_feature_number(),
                 self.config.max_depth,
             ));
-            println!("Max discrepancy : {:?}", self.max_discrepancy);
+            self.max_split_number = root_view.get_max_splits();
+            // println!("Max discrepancy : {:?}", self.max_discrepancy);
+            // println!("Max Split budget : {:?}", self.max_split_number);
             root_index = self.cache.init();
 
             self.statistics.num_features = root_view.get_feature_number();
@@ -119,28 +143,144 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         config.discrepancy = 0;
 
         let error = entry.error;
+        // println!("Initial discrepancy budget : {:?}", config.budget);
         let stopped = self.expand_node_with_view(&root_view, &config, &mut entry, 0, true, error);
-        println!(
-            "For budget {} {:?} with runtime {} and cache len {} and ub {} stopped : {}",
-            self.config.budget,
-            entry,
-            self.elapsed_time(),
-            self.cache.len(),
-            error,
-            stopped
-        );
-        if self.config.nb_runs > 1 {
-            self.config.budget += 1;
-        }
-        if self.config.budget > self.max_discrepancy || !stopped || !self.time_remains(){
+
+        let search_exhausted = self.is_search_exhausted(self.config.budget, self.split_budget, self.budget_strategy);
+
+        // println!(
+        //     "For disc budget {} and split budget {} with runtime {}  cache len {} general solver {} and specialized solver {} give error {} and ub {} stopped : {}",
+        //     self.config.budget,
+        //     self.split_budget,
+        //     self.elapsed_time(),
+        //     self.cache.len(),
+        //     self.statistics.general_solver_call,
+        //     self.statistics.specialized_solver_call,
+        //     entry.error,
+        //     error,
+        //     stopped
+        // );
+
+        if !stopped || !self.time_remains() ||  search_exhausted {
             entry.is_optimal = true;
             is_optimal = true;
+            // return true
         }
+
+
+        if self.config.nb_runs > 1 {
+            let iteration = self.config.nb_runs - 1;
+
+            let (next_feat, next_split) = self.next_budgets(
+                self.config.budget,
+                self.split_budget,
+                iteration,
+                self.budget_strategy,
+            );
+            self.config.budget = next_feat;
+            self.split_budget = next_split;
+        }
+
+
+        // if self.config.nb_runs > 1 {
+        //     if self.config.budget == 0 {
+        //         self.config.budget = 1;
+        //     }
+        //     self.config.budget *= 2;
+        //     self.split_budget += 1;
+        //     if self.split_budget > self.max_split_number {
+        //         self.split_budget = self.max_split_number;
+        //     } else if self.split_budget == self.max_split_number {
+        //         self.split_budget  = self.max_split_number + 1;
+        //     }
+        // }
+
+
+        // if self.config.budget > self.max_discrepancy {
+        //     self.split_budget = self.max_split_number;
+        // }
+
         // println!("Self config {:?}", self.config);
         self.statistics.error = entry.error;
         self.statistics.cache_size = self.cache.len();
         self.statistics.duration = self.elapsed_time();
         is_optimal
+    }
+
+    fn next_budgets(
+        &self,
+        current_feat: usize,
+        current_split: usize,
+        iteration: usize,
+        strategy: BudgetStrategy,
+    ) -> (usize, usize) {
+        match strategy {
+            BudgetStrategy::Diagonal => self.diagonal_budgets(iteration),
+            BudgetStrategy::Lexicographic => self.lexicographic_budgets(current_feat, current_split),
+            BudgetStrategy::GeometricBoth => self.geometric_budgets(iteration),
+            BudgetStrategy::FeaturePriority => self.feature_priority_budgets(current_feat, current_split),
+        }
+    }
+
+    fn diagonal_budgets(&self, iteration: usize) -> (usize, usize) {
+        // Step 1: Find which diagonal the iteration is on
+        let mut diagonal = 0;
+        let mut cumulative = 0;
+
+        // Diagonal d has (d + 1) elements
+        while iteration >= cumulative + (diagonal + 1) {
+            cumulative += diagonal + 1;
+            diagonal += 1;
+        }
+
+        // Step 2: Position inside the diagonal
+        let pos = iteration - cumulative;
+
+        // Step 3: Map to (dis, split)
+        let dis = pos;
+        let split = diagonal + 1 - pos;
+
+        (dis.min(self.max_discrepancy), split.min(self.max_split_number))
+    }
+
+
+    fn lexicographic_budgets(&self, current_feat: usize, current_split: usize) -> (usize, usize) {
+        let next_split = current_split + 1;
+
+        if next_split > self.max_split_number {
+            // Move to next feature, reset splits
+            let next_feat = if current_feat == 0 { 1 } else { current_feat * 2 };
+            (next_feat, 1)
+        } else {
+            (current_feat, next_split)
+        }
+    }
+
+    fn geometric_budgets(&self, iteration: usize) -> (usize, usize) {
+        // Features grow slower (every 2 iterations)
+        // Splits grow faster (every iteration, then double)
+        let feat_budget = iteration / 2;
+        let split_budget = if iteration % 2 == 0 {
+            1 << (iteration / 2)  // Powers of 2
+        } else {
+            1 << (iteration / 2)
+        };
+
+        (feat_budget, split_budget.min(self.max_split_number))
+    }
+
+    fn feature_priority_budgets(&self, current_feat: usize, current_split: usize) -> (usize, usize) {
+        // TODO : Change increasing strategy
+        let next_feat = if current_feat == 0 { 1 } else { current_feat * 2 };
+        let next_split = (current_split + 1).min(self.max_split_number);
+
+        (next_feat.min(self.max_discrepancy), next_split.min(self.max_split_number))
+    }
+
+
+    fn is_search_exhausted(&self, feat_budget: usize, split_budget: usize, strategy: BudgetStrategy) -> bool {
+        feat_budget >= self.max_discrepancy && split_budget > self.max_split_number
+
     }
 
     fn expand_node_with_view(
@@ -237,8 +377,10 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         );
         let mut stopped = false;
         for it in 0..num_features {
+            // let depth_weight = (self.config.max_depth - config.max_depth) + 1;
+            // let feat_discrepancy = config.discrepancy + (it * depth_weight);
+            //
             let feat_discrepancy = config.discrepancy + it;
-            //      println!("Exploring {} pruned {}", heuristics_data[it].1, feat_discrepancy > config.budget);
             if feat_discrepancy > config.budget {
                 return true;
             }
@@ -247,6 +389,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
             node_config.discrepancy = feat_discrepancy;
 
             let (_, feat) = heuristics_data[it];
+            // println!("Expanding Feature  {} with config {:?}", feat, node_config );
 
             stopped |= self.expand_on_feature(
                 view,
@@ -256,6 +399,10 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                 current_best,
                 upper_bound.min(current_best.error),
             );
+            // if config.max_depth == self.config.max_depth {
+            //     println!("Exploring {} with budget {} and stopped {:?}", feat, config.budget, stopped);
+            // }
+            // println!("Feature {feat} stopped {stopped} with config {:?}", node_config);
             if current_best.error == 0 {
                 if USE_CACHE {
                     if let Some(entry) = self.cache.get_mut(parent_index) {
@@ -277,7 +424,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                 entry.is_optimal = !stopped;
             }
         }
-        false
+        stopped
     }
 
     fn expand_on_feature(
@@ -293,6 +440,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         let feature_column_ids = view.get_feature_indices(feature_index);
 
         if config.point_selector == PointSelector::First || self.config.nb_runs <= 1 {
+
             let stopped = self.expand_on_feature_gini_priority(
                 view,
                 feature_index,
@@ -311,6 +459,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         //     println!("56 =  {}", view.get_possible_split_indices(feature_index)[56]);
         // }
 
+
         let possible_index_split = view.get_possible_split_indices(feature_index);
         if possible_index_split.len() == 0 {
             return false;
@@ -322,16 +471,16 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         queue.push_back(init_bound);
 
         let mut stopped = false;
+
+
+
         while !queue.is_empty() {
             if !self.time_remains() {
                 return true;
             }
 
             let mut current_bound = queue.pop_front().unwrap();
-            // if self.config.max_depth == config.max_depth && feature_index == 0{
-            //     println!("Left bound: {} Right bound: {}", current_bound.left_bound, current_bound.right_bound);
-            //
-            // }
+
             if pruner.subinterval_pruning(&current_bound, current_best.error) {
                 // if self.config.max_depth == config.max_depth && feature_index == 0{
                 //     println!("\tpruned by subinterval");
@@ -563,98 +712,6 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                 right_error = usize::MAX;
             }
 
-            //
-            //
-            //
-            // // TODO : check first if I want to use ub
-            // let left_upper_bound = current_best.error.min(upper_bound);
-            // self.statistics.general_solver_call += 1;
-            //
-            // let left_config = config.derive_left();
-            // let mut left_entry = Entry::default();
-            //
-            // let (mut left_index, mut left_is_new) = (0, true);
-            //
-            // if USE_CACHE {
-            //     (left_is_new, left_index) = self.cache.insert(&left_view.bitset, left_config.max_depth);
-            //     if let Some(entry) = self.cache.get_mut(left_index) {
-            //         if left_is_new {
-            //             let (error, label) = classification_error(left_view.get_labels_freqs());
-            //             entry.error = error;
-            //             entry.label = label;
-            //             entry.depth = self.config.max_depth - left_config.max_depth;
-            //         }
-            //         left_entry = *entry;
-            //     }
-            // }
-            // else {
-            //     let (error, label) = classification_error(left_view.get_labels_freqs());
-            //     left_entry.error = error;
-            //     left_entry.label = label;
-            //     left_entry.depth = self.config.max_depth - left_config.max_depth;
-            // }
-            //
-            // stopped |= self.expand_node_with_view(&left_view, &left_config, &mut left_entry, left_index, left_is_new, left_upper_bound);
-            //
-            // // FIXME : Saturing sub ??
-            // let right_upper_bound = current_best.error.min(upper_bound).saturating_sub(left_entry.error).max(int_half_distance);
-            // let mut right_error = current_best.error;
-            //
-            //
-            // if right_upper_bound > 0 || (right_upper_bound == 0 && current_best.error == left_entry.error) {
-            //     self.statistics.general_solver_call += 1;
-            //     let right_config = config.derive_right(left_config.max_gap);
-            //     let mut right_entry = Entry::default();
-            //     right_entry.error = current_best.error;
-            //
-            //     let (mut right_index, mut right_is_new) = (0,true);
-            //
-            //     if USE_CACHE {
-            //
-            //         (right_is_new, right_index) = self.cache.insert(&right_view.bitset, left_config.max_depth);
-            //         if let Some(entry) = self.cache.get_mut(right_index) {
-            //             if right_is_new {
-            //                 let (error, label) = classification_error(right_view.get_labels_freqs());
-            //                 entry.error = error;
-            //                 entry.label = label;
-            //                 entry.depth = self.config.max_depth - right_config.max_depth;
-            //             }
-            //             right_entry = *entry;
-            //         }
-            //     }
-            //     else {
-            //         let (error, label) = classification_error(right_view.get_labels_freqs());
-            //         left_entry.error = error;
-            //         left_entry.label = label;
-            //         left_entry.depth = self.config.max_depth - right_config.max_depth;
-            //     }
-            //
-            //     stopped |= self.expand_node_with_view(&right_view, &right_config, &mut right_entry, right_index, right_is_new, right_upper_bound);
-            //     right_error = right_entry.error;
-            //
-            //     let feature_best = left_entry.error + right_entry.error;
-            //     if feature_best < current_best.error {
-            //         current_best.age = self.config.nb_runs;
-            //         current_best.error = feature_best;
-            //         current_best.feature = feature_index;
-            //         current_best.split = threshold_value;
-            //         current_best.left = left_index;
-            //         current_best.right = right_index;
-            //
-            //         if USE_CACHE {
-            //             if let Some(entry) = self.cache.get_mut(cache_index) {
-            //                 *entry = *current_best;
-            //             }
-            //         }
-            //
-            //         if feature_best == 0 {
-            //             return false;
-            //         }
-            //     }
-            // }
-            // else {
-            //     right_error = usize::MAX;
-            // }
 
             pruner.add_result(selected_point, left_entry.error, right_error);
             if current_bound.left_bound == current_bound.right_bound {
@@ -698,191 +755,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         stopped
     }
 
-    // /// Explore splits prioritized by gini quality while using pruner
-    // fn expand_on_feature_gini_priority(
-    //     &mut self,
-    //     view: &DataView,
-    //     feature_index: usize,
-    //     cache_index: usize,
-    //     config: &SearchConfig,
-    //     current_best: &mut Entry,
-    //     upper_bound: usize,
-    // ) {
-    //     let feature_column = view.get_sorted_feature(feature_index);
-    //     let feature_column_ids = view.get_feature_indices(feature_index);
-    //
-    //     // Get position-sorted splits for pruner
-    //     let possible_splits = view.get_possible_split_indices(feature_index);
-    //
-    //     if possible_splits.len() == 0 {
-    //         return;
-    //     }
-    //
-    //     // Get splits with their positions, sorted by gini (best first)
-    //     let sorted_by_heuristic_indices = view.ordered_possible_splits(feature_index);
-    //
-    //     // Initialize pruner with position-sorted data
-    //     let mut pruner = IntervalsPruner::new(&possible_splits, config.max_gap);
-    //
-    //     let mut queue = VecDeque::new();
-    //     let init_bound = Bound::new(0, possible_splits.len() - 1, None, None);
-    //     queue.push_back(init_bound);
-    //
-    //     // Track which split indices have been pruned
-    //     let mut pruned = vec![false; possible_splits.len()];
-    //
-    //
-    //     if sorted_by_heuristic_indices.len() == 0 {
-    //
-    //     }
-    //
-    //
-    //     // Iterate through splits in gini order (best first)
-    //     for &split_idx in sorted_by_heuristic_indices {
-    //         if !self.time_remains() {
-    //             return;
-    //         }
-    //
-    //
-    //         // Skip if this split has been pruned
-    //         if pruned[split_idx] {
-    //             continue;
-    //         }
-    //
-    //
-    //         let split_point = possible_splits[split_idx];
-    //
-    //
-    //         // Calculate threshold value
-    //         let threshold_value = if split_idx > 0 {
-    //             let previous = feature_column_ids[possible_splits[split_idx - 1]];
-    //             let point = feature_column_ids[split_point];
-    //             (feature_column[previous].value() + feature_column[point].value()) / 2.0
-    //         } else {
-    //             let point = feature_column_ids[split_point];
-    //             (feature_column[point].value() + feature_column[feature_column_ids[0]].value()) / 2.0
-    //         };
-    //
-    //         // Split the view
-    //         let (left_view, right_view) = view.split(feature_index, split_point);
-    //
-    //         // Check minimum support
-    //         if left_view.len() < self.config.min_sup || right_view.len() < self.config.min_sup {
-    //             pruned[split_idx] = true;
-    //             continue;
-    //         }
-    //
-    //         // Evaluate left subtree
-    //         let left_upper_bound = current_best.error.min(upper_bound);
-    //         self.statistics.general_solver_call += 1;
-    //
-    //         let left_config = config.derive_left();
-    //         let mut left_entry = Entry::default();
-    //         let (mut left_index, mut left_is_new) = (0, true);
-    //
-    //         if USE_CACHE {
-    //             (left_is_new, left_index) = self.cache.insert(&left_view.bitset, left_config.max_depth);
-    //             if let Some(entry) = self.cache.get_mut(left_index) {
-    //                 if left_is_new {
-    //                     let (error, label) = classification_error(left_view.get_labels_freqs());
-    //                     entry.error = error;
-    //                     entry.label = label;
-    //                     entry.depth = self.config.max_depth - left_config.max_depth;
-    //                 }
-    //                 left_entry = *entry;
-    //             }
-    //         } else {
-    //             let (error, label) = classification_error(left_view.get_labels_freqs());
-    //             left_entry.error = error;
-    //             left_entry.label = label;
-    //             left_entry.depth = self.config.max_depth - left_config.max_depth;
-    //         }
-    //
-    //         self.expand_node_with_view(&left_view, &left_config, &mut left_entry, left_index, left_is_new, left_upper_bound);
-    //
-    //         // Evaluate right subtree
-    //         let int_half_distance = split_point
-    //             .saturating_sub(possible_splits[0])
-    //             .max(possible_splits[possible_splits.len() - 1].saturating_sub(split_point));
-    //         let right_upper_bound = current_best.error.min(upper_bound).saturating_sub(left_entry.error).max(int_half_distance);
-    //         let mut right_error = current_best.error;
-    //
-    //         if right_upper_bound > 0 || (right_upper_bound == 0 && current_best.error == left_entry.error) {
-    //             self.statistics.general_solver_call += 1;
-    //             let right_config = config.derive_right(left_config.max_gap);
-    //             let mut right_entry = Entry::default();
-    //             right_entry.error = current_best.error;
-    //             let (mut right_index, mut right_is_new) = (0, true);
-    //
-    //             if USE_CACHE {
-    //                 (right_is_new, right_index) = self.cache.insert(&right_view.bitset, left_config.max_depth);
-    //                 if let Some(entry) = self.cache.get_mut(right_index) {
-    //                     if right_is_new {
-    //                         let (error, label) = classification_error(right_view.get_labels_freqs());
-    //                         entry.error = error;
-    //                         entry.label = label;
-    //                         entry.depth = self.config.max_depth - right_config.max_depth;
-    //                     }
-    //                     right_entry = *entry;
-    //                 }
-    //             } else {
-    //                 let (error, label) = classification_error(right_view.get_labels_freqs());
-    //                 right_entry.error = error;
-    //                 right_entry.label = label;
-    //                 right_entry.depth = self.config.max_depth - right_config.max_depth;
-    //             }
-    //
-    //             self.expand_node_with_view(&right_view, &right_config, &mut right_entry, right_index, right_is_new, right_upper_bound);
-    //             right_error = right_entry.error;
-    //             let feature_best = left_entry.error + right_error;
-    //             if feature_best < current_best.error {
-    //                 current_best.error = feature_best;
-    //                 current_best.feature = feature_index;
-    //                 current_best.split = threshold_value;
-    //                 current_best.left = left_index;
-    //                 current_best.right = right_index;
-    //
-    //                 if USE_CACHE {
-    //                     if let Some(entry) = self.cache.get_mut(cache_index) {
-    //                         *entry = *current_best;
-    //                     }
-    //                 }
-    //
-    //             }
-    //
-    //
-    //         }
-    //         else {
-    //             right_error = usize::MAX;
-    //         }
-    //
-    //
-    //         // Record result in pruner
-    //         pruner.add_result(split_idx, left_entry.error, right_error);
-    //
-    //         // Use pruner to mark neighbors as pruned
-    //         let score_difference = (left_entry.error + right_error).saturating_sub(current_best.error);
-    //         let (new_left_bound, new_right_bound) = pruner.neighbourhood_pruning(
-    //             score_difference,
-    //             0,
-    //             possible_splits.len() - 1,
-    //             split_idx
-    //         );
-    //
-    //         // Mark pruned regions
-    //         for i in 0..new_left_bound {
-    //             pruned[i] = true;
-    //         }
-    //         for i in (new_right_bound + 1)..=possible_splits.len() - 1 {
-    //             pruned[i] = true;
-    //         }
-    //
-    //         if current_best.error == 0 {
-    //             break;
-    //         }
-    //
-    //     }
-    // }
+
     /// Explore splits prioritized by gini quality while using pruner
     fn expand_on_feature_gini_priority(
         &mut self,
@@ -893,6 +766,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         current_best: &mut Entry,
         upper_bound: usize,
     ) -> bool {
+
         let feature_column = view.get_sorted_feature(feature_index);
         let feature_column_ids = view.get_feature_indices(feature_index);
 
@@ -911,11 +785,21 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         let mut stopped = false;
 
         // Iterate through splits in order (gini if heuristic enabled, otherwise position order)
+        let local_split_budget = possible_splits.len().min(self.split_budget);
+        // println!("Depth  {} and budget {}", config.max_depth, local_split_budget);
+        // if config.max_depth == self.config.max_depth {
+        //     println!("Feature index: {} split number {}", feature_index, possible_splits.len());
+        // }
+
         if config.use_heuristic {
             // Use gini-sorted order
             let sorted_indices = view.ordered_possible_splits(feature_index);
             for (idx, &split_idx) in sorted_indices.iter().enumerate() {
                 if self.config.nb_runs <= 1 && idx > 0 {
+                    return true;
+                }
+
+                if idx > local_split_budget - 1 {
                     return true;
                 }
 
@@ -954,6 +838,10 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                     return true;
                 }
 
+                // if split_idx > local_split_budget - 1 {
+                //     return true;
+                // }
+
                 if !self.time_remains() {
                     return true;
                 }
@@ -983,6 +871,9 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                 }
             }
         }
+
+        stopped |= local_split_budget < possible_splits.len();
+
 
         stopped
     }
@@ -1226,100 +1117,15 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
             right_error = usize::MAX;
         }
 
-        // // Evaluate left subtree
-        // let left_upper_bound = current_best.error.min(upper_bound);
-        // self.statistics.general_solver_call += 1;
-        //
-        // let left_config = config.derive_left();
-        // let mut left_entry = Entry::default();
-        // let (mut left_index, mut left_is_new) = (0, true);
-        // let mut stopped = false;
-        //
-        // if USE_CACHE {
-        //     (left_is_new, left_index) = self.cache.insert(&left_view.bitset, left_config.max_depth);
-        //     if let Some(entry) = self.cache.get_mut(left_index) {
-        //         if left_is_new {
-        //             let (error, label) = classification_error(left_view.get_labels_freqs());
-        //             entry.error = error;
-        //             entry.label = label;
-        //             entry.depth = self.config.max_depth - left_config.max_depth;
-        //         }
-        //         left_entry = *entry;
-        //     }
-        // } else {
-        //     let (error, label) = classification_error(left_view.get_labels_freqs());
-        //     left_entry.error = error;
-        //     left_entry.label = label;
-        //     left_entry.depth = self.config.max_depth - left_config.max_depth;
-        // }
-        //
-        // stopped |= self.expand_node_with_view(&left_view, &left_config, &mut left_entry, left_index, left_is_new, left_upper_bound);
-        //
-        // // Evaluate right subtree
-        // let int_half_distance = split_point
-        //     .saturating_sub(possible_splits[0])
-        //     .max(possible_splits[possible_splits.len() - 1].saturating_sub(split_point));
-        // let right_upper_bound = current_best.error.min(upper_bound).saturating_sub(left_entry.error).max(int_half_distance);
-        // let mut right_error = current_best.error;
-        //
-        // if right_upper_bound > 0 || (right_upper_bound == 0 && current_best.error == left_entry.error) {
-        //     self.statistics.general_solver_call += 1;
-        //     let right_config = config.derive_right(left_config.max_gap);
-        //     let mut right_entry = Entry::default();
-        //     right_entry.error = current_best.error;
-        //     let (mut right_index, mut right_is_new) = (0, true);
-        //
-        //     if USE_CACHE {
-        //         (right_is_new, right_index) = self.cache.insert(&right_view.bitset, left_config.max_depth);
-        //         if let Some(entry) = self.cache.get_mut(right_index) {
-        //             if right_is_new {
-        //                 let (error, label) = classification_error(right_view.get_labels_freqs());
-        //                 entry.error = error;
-        //                 entry.label = label;
-        //                 entry.depth = self.config.max_depth - right_config.max_depth;
-        //             }
-        //             right_entry = *entry;
-        //         }
-        //     } else {
-        //         let (error, label) = classification_error(right_view.get_labels_freqs());
-        //         right_entry.error = error;
-        //         right_entry.label = label;
-        //         right_entry.depth = self.config.max_depth - right_config.max_depth;
-        //     }
-        //
-        //     stopped |= self.expand_node_with_view(&right_view, &right_config, &mut right_entry, right_index, right_is_new, right_upper_bound);
-        //     right_error = right_entry.error;
-        //
-        //     let feature_best = left_entry.error + right_error;
-        //     if feature_best < current_best.error {
-        //         current_best.age = self.config.nb_runs;
-        //         current_best.error = feature_best;
-        //         current_best.feature = feature_index;
-        //         current_best.split = threshold_value;
-        //         current_best.left = left_index;
-        //         current_best.right = right_index;
-        //
-        //         if USE_CACHE {
-        //             if let Some(entry) = self.cache.get_mut(cache_index) {
-        //                 *entry = *current_best;
-        //             }
-        //         }
-        //
-        //         if feature_best == 0 {
-        //             return false;
-        //         }
-        //
-        //
-        //     }
-        // } else {
-        //     right_error = usize::MAX;
-        // }
-
         // Record result in pruner
         pruner.add_result(split_idx, left_entry.error, right_error);
+        pruned[split_idx] = true;
 
         // Use pruner to mark neighbors as pruned
         let score_difference = (left_entry.error + right_error).saturating_sub(current_best.error);
+        let minimum_right_value = possible_splits[split_idx] + score_difference + 1;
+        let right_value = possible_splits[current_right];
+        // println!("Trying to prune using {current_left} and {current_right} bounds and score difference {score_difference} for feature {feature_index} and split index {split_idx} with point {split_point} and left most zero in pruning {:?} right most zero {:?} len {}. The min value for neighbour pruning is {minimum_right_value} compared to the right value of {right_value}", pruner.leftmost_zero_index, pruner.rightmost_zero_index, possible_splits.len());
         let (new_left_bound, new_right_bound) =
             pruner.neighbourhood_pruning(score_difference, current_left, current_right, split_idx);
 
@@ -1346,6 +1152,19 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         for i in 1..remaining_depth {
             max_discrepancy += nb_candidates.saturating_sub(i);
         }
+
+        // With depth-weighted discrepancy, at depth d, each feature i contributes i * (d + 1)
+        // Maximum discrepancy at depth d is when exploring all features: sum(i * (d + 1) for i in 0..nb_candidates)
+        // This equals (nb_candidates - 1) * nb_candidates / 2 * (d + 1)
+        // let mut max_discrepancy = 0;
+        // for depth in 0..remaining_depth {
+        //     let depth_weight = depth + 1;
+        //     // Maximum contribution at this depth: (0 + 1 + 2 + ... + (nb_candidates-1)) * depth_weight
+        //     // = nb_candidates * (nb_candidates - 1) / 2 * depth_weight
+        //     max_discrepancy += (nb_candidates.saturating_sub(1)) * nb_candidates / 2 * depth_weight;
+        // }
+
+
         max_discrepancy
     }
 
@@ -1364,11 +1183,11 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
 
 #[cfg(test)]
 mod contree_test {
-    use crate::algorithms::continuous_tree::ConTree;
     use crate::common::PointSelector;
     use crate::reader::data_reader::DataReader;
     use crate::reader::DataReaderError;
     use std::path::Path;
+    use crate::algorithms::ConTreeLds;
 
     #[test]
     fn test_run() -> Result<(), DataReaderError> {
@@ -1377,8 +1196,8 @@ mod contree_test {
         let mut dataset = reader.read_file(path)?;
         dataset.sort_features();
 
-        let mut contree: ConTree<true> =
-            ConTree::new(1, 3, 100.0, usize::MAX, PointSelector::Mid, 0, false, true);
+        let mut contree: ConTreeLds<true> =
+            ConTreeLds::new(1, 3, 100.0, usize::MAX, PointSelector::Mid, 0, false, true);
 
         contree.fit(&dataset);
 

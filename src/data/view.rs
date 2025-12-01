@@ -149,6 +149,266 @@ impl<'a> DataView<'a> {
         }
     }
 
+    /// Compute split indices based on MDLP principle:
+    /// A boundary exists between two consecutive unique values if they contain different classes
+    /// This matches the MDLP discretization algorithm's boundary detection
+    #[inline]
+    fn compute_mdlp_split_indices_for(col: &Feature, idxs: &[usize]) -> Vec<usize> {
+        if idxs.is_empty() {
+            return Vec::new();
+        }
+
+        let mut out = Vec::with_capacity(idxs.len() / 10);
+        let mut last_unique_value = None::<usize>;
+
+        // Track classes for the previous unique value
+        let mut prev_classes = std::collections::HashSet::new();
+
+        for (i, &pos) in idxs.iter().enumerate() {
+            let el = &col[pos];
+            let cur_unique = el.unique_value_idx;
+
+            if i == 0 {
+                // First element - initialize
+                last_unique_value = Some(cur_unique);
+                prev_classes.insert(el.label as usize);
+                continue;
+            }
+
+            if Some(cur_unique) != last_unique_value {
+                // We've moved to a new unique value
+                // Collect classes for current unique value
+                let mut current_classes = std::collections::HashSet::new();
+                let mut j = i;
+                while j < idxs.len() && col[idxs[j]].unique_value_idx == cur_unique {
+                    current_classes.insert(col[idxs[j]].label as usize);
+                    j += 1;
+                }
+
+                // Check if merged classes have more than one distinct class
+                let merged_size = prev_classes.union(&current_classes).count();
+                if merged_size > 1 {
+                    // Valid MDLP boundary - split at the start of new unique value
+                    out.push(i);
+                }
+
+                // Update for next iteration
+                prev_classes = current_classes;
+                last_unique_value = Some(cur_unique);
+            } else {
+                // Still in same unique value, just track the class
+                prev_classes.insert(el.label as usize);
+            }
+        }
+
+        out.shrink_to_fit();
+        out
+    }
+
+    /// Create a root DataView using MDLP-style splits (only at label changes)
+    /// This is more selective than the standard root() which uses all unique value changes
+    pub fn root_with_mdlp_splits(dataset: &'a Dataset, sort_by_heuristic: bool) -> Self {
+        let total_instances = dataset.count();
+        let mut label_freq = vec![0; dataset.num_labels()];
+        let mut feature_columns = Vec::new();
+        let mut possible_split_indices = Vec::new();
+
+        for (feature_idx, feature) in dataset.into_iter().enumerate() {
+            let feature_len = feature.len();
+
+            // Use MDLP-style splits: only where label changes between unique values
+            let splits = Self::compute_mdlp_split_indices_for(feature, &(0..feature_len).collect::<Vec<usize>>());
+
+            if feature_idx == 0 {
+                for pos in 0..feature_len {
+                    let el = &feature[pos];
+                    label_freq[el.label as usize] += 1;
+                }
+            }
+
+            possible_split_indices.push(splits);
+            feature_columns.push((0..feature_len).collect::<Vec<usize>>());
+        }
+
+        // Initialize heuristic values
+        let mut heuristic_values = HeuristicValues::new(dataset.num_features());
+
+        // Compute Gini index for each feature if sort_by_heuristic is enabled
+        if sort_by_heuristic {
+            for feature_idx in 0..dataset.num_features() {
+                let feature = &dataset[feature_idx];
+                let idx = &feature_columns[feature_idx];
+                let (ordered_index, gini) = Self::compute_gini_for_all_splits(
+                    feature,
+                    idx,
+                    &possible_split_indices[feature_idx],
+                    &label_freq,
+                    dataset.num_labels(),
+                );
+
+                heuristic_values.set_feature_ginis(feature_idx, ordered_index, gini);
+            }
+            // Sort features by Gini index
+            heuristic_values.sort_by_gini();
+        }
+
+        let mut bitset = Bitset::new(BitsetInit::Full(total_instances));
+        bitset.save_count();
+
+        Self {
+            dataset,
+            total_instances,
+            feature_columns,
+            possible_split_indices,
+            label_freq,
+            sort_by_heuristic,
+            heuristic_values,
+            bitset,
+        }
+    }
+
+
+    /// Create a root DataView with a global budget of N best splits across all features
+    /// Selects the top N splits globally based on Gini scores
+    pub fn root_with_split_budget(dataset: &'a Dataset, max_total_splits: usize) -> Self {
+        let total_instances = dataset.count();
+        let mut label_freq = vec![0; dataset.num_labels()];
+        let mut feature_columns = Vec::new();
+        let mut all_possible_splits = Vec::new();
+
+        // First pass: collect all possible splits
+        for (feature_idx, feature) in dataset.into_iter().enumerate() {
+            let feature_len = feature.len();
+
+            if feature_idx == 0 {
+                for pos in 0..feature_len {
+                    let el = &feature[pos];
+                    label_freq[el.label as usize] += 1;
+                }
+            }
+
+            let mut splits = Vec::new();
+            let mut last_unique_index: Option<usize> = None;
+
+            for pos in 0..feature_len {
+                let el = &feature[pos];
+                if let Some(last) = last_unique_index {
+                    if el.unique_value_idx != last {
+                        splits.push(pos);
+                    }
+                }
+                last_unique_index = Some(el.unique_value_idx);
+            }
+
+            all_possible_splits.push(splits);
+            feature_columns.push((0..feature_len).collect::<Vec<usize>>());
+        }
+
+        // Second pass: compute Gini for all splits
+        let mut global_split_scores = Vec::new();
+
+        for feature_idx in 0..dataset.num_features() {
+            let feature = &dataset[feature_idx];
+            let idx = &feature_columns[feature_idx];
+            let splits = &all_possible_splits[feature_idx];
+
+            if splits.is_empty() {
+                continue;
+            }
+
+            let mut left_label_freq = vec![0usize; dataset.num_labels()];
+            let mut right_label_freq = label_freq.clone();
+            let mut last_pos = 0;
+
+            for &split_pos in splits.iter() {
+                for i in last_pos..split_pos {
+                    let data_idx = idx[i];
+                    let label = feature[data_idx].label as usize;
+                    right_label_freq[label] -= 1;
+                    left_label_freq[label] += 1;
+                }
+
+                let left_count = split_pos;
+                let right_count = idx.len() - left_count;
+
+                let gini = Self::compute_gini_from_frequencies(
+                    &left_label_freq,
+                    &right_label_freq,
+                    left_count,
+                    right_count,
+                );
+
+                global_split_scores.push((feature_idx, split_pos, gini));
+                last_pos = split_pos;
+            }
+        }
+
+        // Sort by Gini and take top N
+        global_split_scores.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+        let selected_splits: Vec<(usize, usize, f64)> = global_split_scores
+            .into_iter()
+            .take(max_total_splits)
+            .collect();
+
+        // Group by feature: Vec<(split_pos, gini)> per feature
+        let mut per_feature_splits: Vec<Vec<(usize, f64)>> = vec![Vec::new(); dataset.num_features()];
+
+        for (feature_idx, split_pos, gini) in selected_splits {
+            per_feature_splits[feature_idx].push((split_pos, gini));
+        }
+
+        // For each feature: sort by position and build structures
+        let mut possible_split_indices: Vec<Vec<usize>> = vec![Vec::new(); dataset.num_features()];
+        let mut heuristic_values = HeuristicValues::new(dataset.num_features());
+
+        for feature_idx in 0..dataset.num_features() {
+            if per_feature_splits[feature_idx].is_empty() {
+                continue;
+            }
+
+            // Sort by position
+            per_feature_splits[feature_idx].sort_by_key(|&(pos, _)| pos);
+
+            // Extract positions
+            possible_split_indices[feature_idx] = per_feature_splits[feature_idx]
+                .iter()
+                .map(|&(pos, _)| pos)
+                .collect();
+
+            // Create list of (index_after_position_sort, gini) and sort by gini
+            let mut idx_gini: Vec<(usize, f64)> = per_feature_splits[feature_idx]
+                .iter()
+                .enumerate()
+                .map(|(i, &(_, gini))| (i, gini))
+                .collect();
+
+            idx_gini.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let ordered_indices: Vec<usize> = idx_gini.iter().map(|&(i, _)| i).collect();
+            let best_gini = idx_gini[0].1;
+            println!("Feature {feature_idx}: {best_gini}");
+
+            heuristic_values.set_feature_ginis(feature_idx, ordered_indices, best_gini);
+        }
+
+        heuristic_values.sort_by_gini();
+
+        let mut bitset = Bitset::new(BitsetInit::Full(total_instances));
+        bitset.save_count();
+
+        Self {
+            dataset,
+            total_instances,
+            feature_columns,
+            possible_split_indices,
+            label_freq,
+            sort_by_heuristic: true,
+            heuristic_values,
+            bitset,
+        }
+    }
+
+
     pub fn get_dataset_size(&self) -> usize {
         self.feature_columns[0].len()
     }
@@ -175,6 +435,10 @@ impl<'a> DataView<'a> {
 
     pub fn get_possible_split_indices(&self, f: usize) -> &[usize] {
         &self.possible_split_indices[f]
+    }
+    
+    pub fn get_max_splits(&self) -> usize {
+        self.possible_split_indices.iter().map(|x| x.len()).max().unwrap()
     }
 
     fn recompute_split_indices_all(&mut self) {
@@ -586,7 +850,7 @@ mod data_view_tests {
     #[test]
     fn test_small() -> Result<(), DataReaderError> {
         let reader = DataReader::default();
-        let path = Path::new("test_data/anneal.txt");
+        let path = Path::new("test_data/avila.txt");
         let mut dataset = reader.read_file(path)?;
         dataset.sort_features();
 
@@ -594,19 +858,18 @@ mod data_view_tests {
         println!("{:?}", dataset.count());
         println!("{:?}", dataset.num_labels());
 
-        let view = DataView::root(&dataset, true);
+        let view = DataView::root_with_split_budget(&dataset, 500);
         println!(
             "Possible split {:?}",
             view.heuristic_values.best_gini_per_feature
         );
+        println!("Split for feature one : {:?}", view.get_possible_split_indices(4));
+        println!("Split for feature one : {:?}", view.ordered_possible_splits(4));
+        // println!("Split for feature one : {:?}", view.get_possible_split_indices(0).len() );
+
         println!("{:?}", view.get_dataset_size());
         println!("Before label freq {:?}", view.get_labels_freqs());
 
-        let (left, right) = view.split(4, 556);
-        println!("left {}", left.bitset.count());
-        println!("left {:?}", left.possible_split_indices);
-        let (ll, lr) = left.split(9, 546);
-        println!("ll {:?}", ll.heuristic_values.best_gini_per_feature);
 
         // println!("Right {}", right.bitset.count());
         // println!("l {:?}", left.heuristic_values.gini_per_split[0].len());

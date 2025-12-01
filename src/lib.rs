@@ -1,11 +1,12 @@
-mod algorithms;
+pub mod algorithms;
 mod bitsets;
 mod caching;
-mod common;
-mod data;
+pub mod common;
+mod cover;
+pub mod data;
 mod globals;
-mod parsers;
-mod reader;
+pub mod parsers;
+pub mod reader;
 mod tree;
 
 pub fn add(left: usize, right: usize) -> usize {
