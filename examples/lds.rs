@@ -10,6 +10,7 @@ use pytrees_continuous::data::view::DataView;
 use pytrees_continuous::parsers::GeneralParser;
 use pytrees_continuous::reader::data_reader::DataReader;
 use pytrees_continuous::reader::DataReaderError;
+use pytrees_continuous::tree::Tree;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Res {
@@ -25,6 +26,7 @@ pub struct Res {
     pub cache_size: Vec<usize>,
     pub general_solver_calls: Vec<usize>,
     pub specialized_solver_call: Vec<usize>,
+    pub trees: Vec<Tree>
 }
 
 pub fn save_results(result: &Res, result_path: &PathBuf) -> std::io::Result<()> {
@@ -104,6 +106,7 @@ fn main() -> Result<(), DataReaderError> {
                 heuristic: app.sort_by_heuristic,
                 fast_d2: true,
                 specialized_solver_call: vec![],
+                trees: vec![],
             }
         },
 
@@ -122,6 +125,7 @@ fn main() -> Result<(), DataReaderError> {
             cache_size: vec![],
             general_solver_calls: vec![],
             specialized_solver_call: vec![],
+            trees: vec![],
         }
     };
 
@@ -134,10 +138,16 @@ fn main() -> Result<(), DataReaderError> {
 
     let mut counter = 0;
     let checkpoint_interval = 10;
+    let mut last = usize::MAX;
     while !is_done {
         is_done = solver.partial_fit(&view);
         let stat = solver.stats();
+        if stat.error < last {
+            result.trees.push(solver.tree());
+            last = stat.error;
+        }
         push_from_stats(&mut result, &stat);
+
         if counter > 0 && counter % checkpoint_interval == 0 {
             save_results(&result, &result_path).expect("Failed to save file");
         }

@@ -2,10 +2,12 @@ mod continuous_tree;
 mod contree_lds;
 mod depth2;
 mod interval_pruner;
+mod contree_lds_prune;
 
 use crate::common::{PointSelector, Statistics};
 pub use continuous_tree::ConTree;
 pub use contree_lds::ConTreeLds;
+use crate::tree::Tree;
 use crate::data::Dataset;
 use crate::data::view::DataView;
 
@@ -65,10 +67,17 @@ impl<const USE_CACHE: bool> GenericConTree<USE_CACHE> {
         }
     }
     
-    pub fn stats(&mut self) -> &Statistics {
+    pub fn stats(&self) -> Statistics {
         match self { 
             GenericConTree::Normal(solver) => solver.statistics(),
-            GenericConTree::LDS(solver) => solver.statistics()
+            GenericConTree::LDS(solver) => *solver.statistics()
+        }
+    }
+
+    pub fn tree(&mut self) -> Tree {
+        match self {
+            GenericConTree::Normal(solver) => Tree::new(),
+            GenericConTree::LDS(solver) => solver.get_solution_tree()
         }
     }
 

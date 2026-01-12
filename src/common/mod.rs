@@ -1,3 +1,5 @@
+pub mod budget_iterator;
+
 use clap::ValueEnum;
 
 #[derive(Default, Copy, Debug, Clone, PartialOrd, PartialEq, ValueEnum)]

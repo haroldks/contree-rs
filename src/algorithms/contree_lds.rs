@@ -7,8 +7,11 @@ use crate::data::{Dataset, Feature};
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::collections::VecDeque;
+use std::iter::Peekable;
 use std::time::Instant;
 use serde::Deserialize;
+use crate::common::budget_iterator::BudgetIterator;
+use crate::tree::{NodeInfos, Tree, TreeNode};
 
 pub struct ConTreeLds<const USE_CACHE: bool> {
     config: SearchConfig,
@@ -21,6 +24,7 @@ pub struct ConTreeLds<const USE_CACHE: bool> {
     max_split_number: usize,
     split_budget: usize,
     budget_strategy: BudgetStrategy,
+    budget_iterator: Peekable<BudgetIterator>,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Default)]
@@ -66,6 +70,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
             max_split_number: usize::MAX,
             split_budget: 1,
             budget_strategy: BudgetStrategy::Diagonal,
+            budget_iterator: BudgetIterator::new(0, 0).peekable(),
         }
     }
 
@@ -107,6 +112,8 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                 self.config.max_depth,
             ));
             self.max_split_number = root_view.get_max_splits();
+
+            self.budget_iterator = BudgetIterator::new(self.max_discrepancy, self.max_split_number).peekable();
             // println!("Max discrepancy : {:?}", self.max_discrepancy);
             // println!("Max Split budget : {:?}", self.max_split_number);
             root_index = self.cache.init();
@@ -151,6 +158,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         // println!(
         //     "For disc budget {} and split budget {} with runtime {}  cache len {} general solver {} and specialized solver {} give error {} and ub {} stopped : {}",
         //     self.config.budget,
+        //      // self.max_discrepancy,
         //     self.split_budget,
         //     self.elapsed_time(),
         //     self.cache.len(),
@@ -161,6 +169,8 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
         //     stopped
         // );
 
+        // let tree = self.get_solution_tree();
+
         if !stopped || !self.time_remains() ||  search_exhausted {
             entry.is_optimal = true;
             is_optimal = true;
@@ -169,16 +179,23 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
 
 
         if self.config.nb_runs > 1 {
-            let iteration = self.config.nb_runs - 1;
+           if self.budget_iterator.peek().is_some() {
+                (self.config.budget, self.split_budget) = self.budget_iterator.next().unwrap();
+           }
 
-            let (next_feat, next_split) = self.next_budgets(
-                self.config.budget,
-                self.split_budget,
-                iteration,
-                self.budget_strategy,
-            );
-            self.config.budget = next_feat;
-            self.split_budget = next_split;
+            // let iteration = self.config.nb_runs - 1;
+            //
+            // let (next_feat, next_split) = self.next_budgets(
+            //     self.config.budget,
+            //     self.split_budget,
+            //     iteration,
+            //     self.budget_strategy,
+            // );
+            // self.config.budget = next_feat;
+            // self.split_budget = next_split;
+            // self.split_budget = next_split;
+
+            // println!("Next budgets  {} {}", x, y);
         }
 
 
@@ -348,19 +365,20 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
 
         if config.fast_d2 && config.max_depth <= 2  {
 
-
-            let _tree = self.specialized.fit(
+            let tree = self.specialized.fit(
                 view,
                 &config,
                 current_best,
                 upper_bound,
                 &mut self.statistics,
             );
-            // tree.print();
+            // _tree.print();
             if USE_CACHE {
+                let tree_index = self.cache.insert_tree(tree);
                 if let Some(entry) = self.cache.get_mut(parent_index) {
                     current_best.ub = upper_bound;
-                    *entry = *current_best
+                    *entry = *current_best;
+                    entry.tree_idx = Some(tree_index);
                 }
                 self.statistics.specialized_solver_call += 1;
             }
@@ -838,6 +856,10 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                     return true;
                 }
 
+                if split_idx > local_split_budget - 1 {
+                    return true;
+                }
+
                 // if split_idx > local_split_budget - 1 {
                 //     return true;
                 // }
@@ -1179,6 +1201,57 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
     pub fn statistics(&self) -> &Statistics {
         &self.statistics
     }
+
+    pub fn get_solution_tree(&mut self) -> Tree {
+        let mut solution = Tree::new();
+        if let Some(root) = self.cache.root() {
+            if let Some(tree_idx) = root.tree_idx {
+                solution = self.cache.get_tree(tree_idx).unwrap().clone();
+            } else {
+                let infos = self.create_solution_tree_entry(root);
+                let root = solution.add_root(TreeNode::new(infos));
+                self.build_tree_recursion(&mut solution, root, self.cache.root_index());
+            }
+        }
+        solution
+    }
+
+    fn create_solution_tree_entry(&self, cache_entry: &Entry) -> NodeInfos {
+        let mut infos = NodeInfos {
+            feature: Some(cache_entry.feature),
+            split: Some(cache_entry.split),
+            error: cache_entry.error,
+            label: Some(cache_entry.label),
+        };
+
+        infos
+    }
+
+    fn build_tree_recursion(&self, solution: &mut Tree, parent: usize, cache_index: usize) {
+        let branches = self.cache.get_children(cache_index);
+        for (branch, &child_index) in branches.iter().enumerate() {
+            if child_index > 0 {
+                if let Some(entry) = self.cache.get(child_index) {
+                    if let Some(tree_idx) = entry.tree_idx {
+                        if let Some(sub_tree) = self.cache.get_tree(tree_idx) {
+                            let infos = sub_tree.root_details();
+                            let solution_child_index = solution.add_node(parent, branch==0, TreeNode::new(infos));
+                            solution.update_subtree(solution_child_index, sub_tree, sub_tree.get_root_index());
+                        }
+                    } else {
+                        let infos = self.create_solution_tree_entry(entry);
+                        let solution_child_index = solution.add_node(parent, branch==0, TreeNode::new(infos));
+                        if !entry.is_leaf {
+                            self.build_tree_recursion(solution, solution_child_index, cache_index);
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+
+
 }
 
 #[cfg(test)]

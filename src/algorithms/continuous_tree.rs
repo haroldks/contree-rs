@@ -8,6 +8,7 @@ use rand::rngs::ThreadRng;
 use rand::Rng;
 use std::collections::VecDeque;
 use std::time::Instant;
+use crate::tree::{NodeInfos, Tree, TreeNode};
 
 pub struct ConTree<const USE_CACHE: bool> {
     config: SearchConfig,
@@ -16,6 +17,7 @@ pub struct ConTree<const USE_CACHE: bool> {
     specialized: ConTreeDepth2,
     runtime: Instant,
     rng: ThreadRng,
+    pub tree: Tree,
 }
 
 impl<const USE_CACHE: bool> ConTree<USE_CACHE> {
@@ -46,6 +48,7 @@ impl<const USE_CACHE: bool> ConTree<USE_CACHE> {
             specialized: ConTreeDepth2::default(),
             runtime: Instant::now(),
             rng: rand::rng(),
+            tree: Tree::default(),
         }
     }
 
@@ -83,9 +86,12 @@ impl<const USE_CACHE: bool> ConTree<USE_CACHE> {
             true,
             root_config.max_error,
         );
+
         self.statistics.error = entry.error;
         self.statistics.cache_size = self.cache.len();
         self.statistics.duration = self.elapsed_time();
+        self.get_solution_tree();
+        self.tree.print();
     }
 
     fn expand_node_with_view(
@@ -151,8 +157,11 @@ impl<const USE_CACHE: bool> ConTree<USE_CACHE> {
             );
             // tree.print();
             if USE_CACHE {
+                let tree_index = self.cache.insert_tree(_tree);
                 if let Some(entry) = self.cache.get_mut(parent_index) {
-                    *entry = *current_best
+
+                    *entry = *current_best;
+                    entry.tree_idx = Some(tree_index);
                 }
                 self.statistics.specialized_solver_call += 1;
             }
@@ -926,9 +935,59 @@ impl<const USE_CACHE: bool> ConTree<USE_CACHE> {
         self.runtime.elapsed().as_secs_f64()
     }
 
-    pub fn statistics(&self) -> &Statistics {
-        &self.statistics
+    pub fn statistics(&self) -> Statistics {
+        self.statistics
     }
+
+    pub fn get_solution_tree(&mut self) {
+        let mut solution = Tree::new();
+        if let Some(root) = self.cache.root() {
+            if let Some(tree_idx) = root.tree_idx {
+                solution = self.cache.get_tree(tree_idx).unwrap().clone();
+            } else {
+                let infos = self.create_solution_tree_entry(root);
+                let root = solution.add_root(TreeNode::new(infos));
+                self.build_tree_recursion(&mut solution, root, self.cache.root_index());
+            }
+        }
+        self.tree = solution;
+    }
+
+    fn create_solution_tree_entry(&self, cache_entry: &Entry) -> NodeInfos {
+        let mut infos = NodeInfos {
+            feature: Some(cache_entry.feature),
+            split: Some(cache_entry.split),
+            error: cache_entry.error,
+            label: Some(cache_entry.label),
+        };
+
+        infos
+    }
+
+    fn build_tree_recursion(&self, solution: &mut Tree, parent: usize, cache_index: usize) {
+        let branches = self.cache.get_children(cache_index);
+        for (branch, &child_index) in branches.iter().enumerate() {
+            if child_index > 0 {
+                if let Some(entry) = self.cache.get(child_index) {
+                    if let Some(tree_idx) = entry.tree_idx {
+                        if let Some(sub_tree) = self.cache.get_tree(tree_idx) {
+                            let infos = sub_tree.root_details();
+                            let solution_child_index = solution.add_node(parent, branch==0, TreeNode::new(infos));
+                            solution.update_subtree(solution_child_index, sub_tree, sub_tree.get_root_index());
+                        }
+                    } else {
+                        let infos = self.create_solution_tree_entry(entry);
+                        let solution_child_index = solution.add_node(parent, branch==0, TreeNode::new(infos));
+                        if !entry.is_leaf {
+                            self.build_tree_recursion(solution, solution_child_index, cache_index);
+                        }
+                    }
+
+                }
+            }
+        }
+    }
+
 }
 
 #[cfg(test)]

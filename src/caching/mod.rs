@@ -1,6 +1,7 @@
 use crate::bitsets::{BitCollection, Bitset};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
+use crate::tree::Tree;
 
 // TODO: use private fields and updater
 #[derive(Copy, Clone, Serialize, Deserialize, Debug)]
@@ -19,6 +20,7 @@ pub struct Entry {
     pub depth: usize,
     pub left: usize,
     pub right: usize,
+    pub tree_idx: Option<usize>
 }
 
 impl Default for Entry {
@@ -35,14 +37,16 @@ impl Default for Entry {
             depth: 0,
             left: 0,
             right: 0,
+            tree_idx: None,
         }
     }
 }
-
+#[derive(Debug)]
 pub struct Cache {
     depth: usize,
     num_samples: usize,
     arena: Vec<Entry>,
+    trees: Vec<Tree>,
     map: Vec<Vec<FxHashMap<Bitset, usize>>>,
     root_index: usize,
 }
@@ -59,6 +63,7 @@ impl Cache {
             depth,
             num_samples,
             arena: Vec::new(),
+            trees: vec![],
             map: vec![vec![FxHashMap::default(); num_samples]; depth],
             root_index: 0,
         }
@@ -66,6 +71,10 @@ impl Cache {
 
     pub fn root(&self) -> Option<&Entry> {
         self.arena.get(self.root_index)
+    }
+
+    pub fn root_index(&self) -> usize {
+        self.root_index
     }
 
     pub fn root_mut(&mut self) -> Option<&mut Entry> {
@@ -108,5 +117,20 @@ impl Cache {
 
     pub fn len(&self) -> usize {
         self.arena.len()
+    }
+
+    pub fn insert_tree(&mut self, tree: Tree) -> usize {
+        let len = self.trees.len();
+        self.trees.push(tree);
+        len
+    }
+
+    pub fn get_tree(&self, tree_idx: usize) -> Option<&Tree> {
+        self.trees.get(tree_idx)
+    }
+
+    pub fn get_children(&self, index: usize) -> [usize; 2] {
+        assert!(index < self.arena.len());
+        [self.arena[index].left, self.arena[index].right]
     }
 }
