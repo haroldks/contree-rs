@@ -182,7 +182,15 @@ dmypy.json
 # pytype static type analyzer
 .pytype/
 
-experiments
+experiments/*
+!experiments/wrapper.sh
+!experiments/crossval.sh
+!experiments/benchmarks.sh
+!experiments/experiments.py
+!experiments/c45.py
+!experiments/c45_crossval.py
+!experiments/crossvalid.ipynb
+!experiments/experiments_results_compiler.ipynb
 
 # Cython debug symbols
 cython_debug/
