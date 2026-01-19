@@ -10,7 +10,6 @@ mod globals;
 pub mod parsers;
 pub mod reader;
 pub mod tree;
-mod segment_tree;
 
 pub fn add(left: usize, right: usize) -> usize {
     left + right
