@@ -69,7 +69,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
             max_discrepancy: usize::MAX,
             max_split_number: usize::MAX,
             split_budget: 1,
-            budget_strategy: BudgetStrategy::Diagonal,
+            budget_strategy: BudgetStrategy::GeometricBoth,
             budget_iterator: BudgetIterator::new(0, 0).peekable(),
         }
     }
@@ -311,7 +311,6 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
     ) -> bool {
         if USE_CACHE && (current_best.error == 0 || view.len() == 0) {
             if let Some(entry) = self.cache.get_mut(parent_index) {
-                entry.is_leaf = true;
                 entry.is_optimal = true;
                 entry.ub = upper_bound;
                 *current_best = *entry;
@@ -417,9 +416,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                 current_best,
                 upper_bound.min(current_best.error),
             );
-            // if config.max_depth == self.config.max_depth {
-            //     println!("Exploring {} with budget {} and stopped {:?}", feat, config.budget, stopped);
-            // }
+
             // println!("Feature {feat} stopped {stopped} with config {:?}", node_config);
             if current_best.error == 0 {
                 if USE_CACHE {
@@ -1242,7 +1239,7 @@ impl<const USE_CACHE: bool> ConTreeLds<USE_CACHE> {
                         let infos = self.create_solution_tree_entry(entry);
                         let solution_child_index = solution.add_node(parent, branch==0, TreeNode::new(infos));
                         if !entry.is_leaf {
-                            self.build_tree_recursion(solution, solution_child_index, cache_index);
+                            self.build_tree_recursion(solution, solution_child_index, child_index);
                         }
                     }
 

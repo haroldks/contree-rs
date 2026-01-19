@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 use crate::algorithms::{ConTree, ConTreeLds, GenericConTree};
 use crate::common::PointSelector;
 use crate::data::view::DataView;

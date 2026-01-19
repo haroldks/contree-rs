@@ -1,3 +1,5 @@
+#![allow(warnings)]
+
 pub mod algorithms;
 mod bitsets;
 mod caching;

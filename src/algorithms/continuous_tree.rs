@@ -979,7 +979,7 @@ impl<const USE_CACHE: bool> ConTree<USE_CACHE> {
                         let infos = self.create_solution_tree_entry(entry);
                         let solution_child_index = solution.add_node(parent, branch==0, TreeNode::new(infos));
                         if !entry.is_leaf {
-                            self.build_tree_recursion(solution, solution_child_index, cache_index);
+                            self.build_tree_recursion(solution, solution_child_index, child_index);
                         }
                     }
 
